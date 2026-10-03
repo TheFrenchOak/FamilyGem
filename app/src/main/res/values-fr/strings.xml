@@ -58,6 +58,8 @@
     <string name="sibling">Frère/sœur</string>
     <string name="parent">Parent</string>
     <string name="unlink">Délier</string>
+    <string name="highlight_lineage">Mettre en évidence la lignée</string>
+    <string name="remove_highlight">Retirer la mise en évidence</string>
     <string name="modify">Modifier</string>
     <string name="new_relative">Lier une nouvelle personne</string>
     <string name="family_as_spouse">Famille (en tant que conjoint)</string>

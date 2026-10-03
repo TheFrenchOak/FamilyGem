@@ -54,6 +54,7 @@ import app.familygem.profile.ProfileActivity
 import app.familygem.util.ChangeUtil
 import app.familygem.util.FamilyUtil
 import app.familygem.util.FileUtil
+import app.familygem.util.Lineage
 import app.familygem.util.PersonUtil
 import app.familygem.util.TreeUtil
 import app.familygem.util.Util.confirmDelete
@@ -66,10 +67,18 @@ import graph.gedcom.Bond
 import graph.gedcom.CurveLine
 import graph.gedcom.FamilyNode
 import graph.gedcom.Graph
+import graph.gedcom.HorizontalLine
 import graph.gedcom.Line
 import graph.gedcom.Metric
+import graph.gedcom.NextLine
 import graph.gedcom.PersonNode
 import graph.gedcom.Util
+import graph.gedcom.bondCenterX
+import graph.gedcom.child
+import graph.gedcom.family
+import graph.gedcom.firstPartner
+import graph.gedcom.nextPartner
+import graph.gedcom.secondPartner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -99,6 +108,9 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
     private var lineStroke = 0 // Lines thickness, in pixels
     private var lineDash = 0 // Dashed lines interval
     private var glowSpace = 0 // Space to display glow around cards
+    private var haloSpace = 0 // Thickness of the frame around highlighted cards
+    private var lineage: Lineage? = null // Highlighted ancestors and descendants of a person
+    private val halos: MutableList<Halo> = ArrayList()
     private var popup: View? = null // Suggestion balloon
     private var printing = false // We are generating a PNG or PDF
     private val leftToRight = TextUtilsCompat.getLayoutDirectionFromLocale(Locale.getDefault()) == View.LAYOUT_DIRECTION_LTR
@@ -112,6 +124,7 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
         lineStroke = toPx(2f)
         lineDash = toPx(4f)
         glowSpace = toPx(35f)
+        haloSpace = toPx(4f)
 
         binding = DiagramFragmentBinding.inflate(inflater, container, false)
         binding.diagramHamburger.setOnClickListener {
@@ -225,6 +238,7 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
     private suspend fun drawDiagram() = coroutineScope {
         graphicNodes.clear()
         loadingImages.clear()
+        lineage = findLineage()
         // Place various type of graphic nodes in 'graphicNodes' list
         for (personNode in graph.personNodes) {
             ensureActive()
@@ -320,6 +334,7 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
 
     /** Places cards on their final position and updates glow and lines. */
     private fun displaceDiagram() {
+        addHalos()
         // Position of the nodes from dips to pixels
         graphicNodes.forEach {
             val params = it.layoutParams as RelativeLayout.LayoutParams
@@ -345,6 +360,42 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
             (toPx(fulcrumView!!.metric.centerX()) * scale - moveLayout.width / 2 + padding).toInt(),
             (toPx(fulcrumView!!.metric.centerY()) * scale - moveLayout.height / 2 + padding).toInt()
         )
+    }
+
+    /** Generates the lineage of the person chosen to be highlighted in the current tree. */
+    private fun findLineage(): Lineage? {
+        val tree = Global.settings.currentTree
+        val person = Global.gc.getPerson(tree.lineage)
+        if (person == null) tree.lineage = null // The person could have been deleted
+        return person?.let { Lineage(it) }
+    }
+
+    /** Highlights in the diagram the ancestors and descendants of a person, or removes the highlight if the ID is null. */
+    private fun highlightLineage(personId: String?) {
+        Global.settings.currentTree.lineage = personId
+        Global.settings.save()
+        lineage = findLineage()
+        if (graphicNodes.size > 1) { // A single card has no lines and no frame
+            addHalos()
+            lines.redraw()
+            backLines.redraw()
+        }
+    }
+
+    /** Puts a colored frame behind the cards of the highlighted lineage, above the lines. */
+    private fun addHalos() {
+        halos.forEach { box.removeView(it) }
+        halos.clear()
+        val lineage = lineage ?: return
+        var index = box.indexOfChild(lines) + 1
+        graphicNodes.forEach {
+            val metric = it.metric
+            if (metric is PersonNode && metric.person.id in lineage.persons) {
+                val halo = Halo(context(), metric)
+                box.addView(halo, index++)
+                halos.add(halo)
+            }
+        }
     }
 
     /** Updates both diagram and main menu. */
@@ -421,6 +472,23 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
             if (printing) {
                 visibility = GONE
             }
+        }
+    }
+
+    /** Colored frame around the card of a person belonging to the highlighted lineage. */
+    inner class Halo(context: Context, personNode: PersonNode) : View(context) {
+        init {
+            setBackgroundResource(R.drawable.person_highlight)
+            val params = RelativeLayout.LayoutParams(toPx(personNode.width) + haloSpace * 2, toPx(personNode.height) + haloSpace * 2)
+            params.leftMargin = toPx(personNode.x) - haloSpace
+            params.topMargin = toPx(personNode.y) - haloSpace
+            params.rightMargin = -haloSpace
+            params.bottomMargin = -haloSpace
+            layoutParams = params
+        }
+
+        override fun invalidate() {
+            if (printing) setBackgroundResource(R.drawable.person_highlight_print)
         }
     }
 
@@ -559,7 +627,9 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
     /** The view of lines connecting the cards. */
     inner class Lines(context: Context, private val lineGroups: List<Set<Line>>, private val dashed: Boolean) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val paths: MutableList<Path> = ArrayList() // Each path contains many lines
+        private val highlightPaths: MutableList<Path> = ArrayList() // Lines of the highlighted lineage, drawn above the others
         private val biggestPath = graph.biggestPathSize
         private val maxBitmap = graph.maxBitmapSize
         private val matrix = Matrix()
@@ -567,26 +637,27 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
 
         init {
             paint.style = Paint.Style.STROKE
+            highlightPaint.style = Paint.Style.STROKE
         }
 
         override fun invalidate() {
             paint.color = ResourcesCompat.getColor(resources, if (printing) R.color.diagram_lines_print else R.color.diagram_lines_screen, null)
+            highlightPaint.color = ResourcesCompat.getColor(
+                resources, if (printing) R.color.diagram_highlight_print else R.color.diagram_highlight_screen, null
+            )
             paths.clear() // In case of PNG or PDF print
+            highlightPaths.clear()
             // Put the lines in one or more paths
             for ((pathNum, lineGroup) in lineGroups.withIndex()) {
-                if (pathNum >= paths.size) paths.add(Path())
+                if (pathNum >= paths.size) {
+                    paths.add(Path())
+                    highlightPaths.add(Path())
+                }
                 val path = paths[pathNum]
+                val highlightPath = highlightPaths[pathNum]
                 for (line in lineGroup) {
-                    val x1 = toPxFloat(line.x1)
-                    val y1 = toPxFloat(line.y1)
-                    val x2 = toPxFloat(line.x2)
-                    val y2 = toPxFloat(line.y2)
-                    path.moveTo(x1, y1)
-                    if (line is CurveLine) {
-                        path.cubicTo(x1, y2, x2, y1, x2, y2)
-                    } else { // Horizontal or vertical line
-                        path.lineTo(x2, y2)
-                    }
+                    path.trace(line, line.x1, line.y1, line.x2, line.y2)
+                    findHighlight(line)?.let { highlightPath.trace(line, it[0], it[1], it[2], it[3]) }
                 }
             }
             // Possibly downscales paths and thickness
@@ -595,7 +666,7 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
             if (biggestPath > maxBitmap) {
                 val factor = maxBitmap / biggestPath
                 matrix.setScale(factor, factor)
-                for (path in paths) {
+                for (path in paths + highlightPaths) {
                     path.transform(matrix)
                 }
                 stroke *= factor
@@ -603,7 +674,11 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
                 dashIntervals[1] *= factor
             }
             paint.strokeWidth = stroke
-            if (dashed) paint.pathEffect = DashPathEffect(dashIntervals, 0f)
+            highlightPaint.strokeWidth = stroke * 2
+            if (dashed) {
+                paint.pathEffect = DashPathEffect(dashIntervals, 0f)
+                highlightPaint.pathEffect = paint.pathEffect
+            }
 
             // Update this view size
             val params = layoutParams as RelativeLayout.LayoutParams
@@ -624,6 +699,59 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
             paths.forEach {
                 canvas.drawPath(it, paint)
             }
+            highlightPaths.forEach {
+                canvas.drawPath(it, highlightPaint)
+            }
+        }
+
+        /** Rebuilds the paths and actually redraws the view, since invalidate() is overridden without calling super. */
+        fun redraw() {
+            invalidate()
+            super.invalidate()
+        }
+
+        /** Adds a line to the path, with coordinates in dips. */
+        private fun Path.trace(line: Line, x1: Float, y1: Float, x2: Float, y2: Float) {
+            val startX = toPxFloat(x1)
+            val startY = toPxFloat(y1)
+            val endX = toPxFloat(x2)
+            val endY = toPxFloat(y2)
+            moveTo(startX, startY)
+            if (line is CurveLine) {
+                cubicTo(startX, endY, endX, startY, endX, endY)
+            } else { // Horizontal or vertical line
+                lineTo(endX, endY)
+            }
+        }
+
+        /** Returns the coordinates in dips (x1, y1, x2, y2) of the part of a line that belongs to the highlighted lineage, or null. */
+        private fun findHighlight(line: Line): FloatArray? {
+            val lineage = lineage ?: return null
+            val familyId = line.family?.id ?: return null
+            if (familyId !in lineage.families) return null
+            val segment = floatArrayOf(line.x1, line.y1, line.x2, line.y2)
+            when (line) {
+                is CurveLine -> if (line.child.id !in lineage.persons) return null
+                is NextLine -> if (line.nextPartner.id !in lineage.persons) return null
+                is HorizontalLine -> {
+                    val first = line.firstPartner.id in lineage.persons
+                    val second = line.secondPartner.id in lineage.persons
+                    if (!first && !second) return null
+                    if (first != second) { // Only the half line between the partner of the lineage and the bond
+                        val centerX = line.bondCenterX
+                        val centerY = if (line.x1 == line.x2) line.y1
+                        else line.y1 + (line.y2 - line.y1) * (centerX - line.x1) / (line.x2 - line.x1)
+                        if (first) {
+                            segment[2] = centerX
+                            segment[3] = centerY
+                        } else {
+                            segment[0] = centerX
+                            segment[1] = centerY
+                        }
+                    }
+                }
+            }
+            return segment
         }
     }
 
@@ -727,6 +855,11 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
             menu.add(0, 1, 0, familyLabels[0])
         if (familyLabels[1] != null)
             menu.add(0, 2, 0, familyLabels[1])
+        val highlightedId = Global.settings.currentTree.lineage
+        if (personId != highlightedId)
+            menu.add(0, 8, 0, R.string.highlight_lineage)
+        if (highlightedId != null)
+            menu.add(0, 9, 0, R.string.remove_highlight)
         menu.add(0, 3, 0, R.string.new_relative)
         if (U.linkablePersons(person))
             menu.add(0, 4, 0, R.string.link_person)
@@ -810,6 +943,10 @@ class DiagramFragment : BaseFragment(R.layout.diagram_fragment) {
                 refreshAll()
                 U.deleteEmptyFamilies(context, { refreshAll() }, false, *families)
             }
+        } else if (id == 8) { // Highlight lineage
+            highlightLineage(personId)
+        } else if (id == 9) { // Remove highlight
+            highlightLineage(null)
         } else return false
         return true
     }

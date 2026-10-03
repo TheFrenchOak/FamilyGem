@@ -182,6 +182,10 @@ public class Settings {
         public int generations;
         public int media;
         public String root;
+        /**
+         * ID of the person whose lineage is highlighted in the diagram.
+         */
+        public String lineage;
         public TreeSettings settings;
         /**
          * List of shares made for this tree.

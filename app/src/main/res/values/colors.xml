@@ -25,6 +25,8 @@
     <color name="partner_print">#E6E6E6</color>
     <color name="diagram_lines_screen">#FFFFFF</color>
     <color name="diagram_lines_print">#666666</color>
+    <color name="diagram_highlight_screen">#44DD77</color>
+    <color name="diagram_highlight_print">#119944</color>
     <color name="source">#FFCC66</color>
     <color name="source_citation">#FFEEAA</color>
     <color name="repository">#AA9988</color>

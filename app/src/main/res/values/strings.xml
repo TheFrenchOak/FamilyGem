@@ -171,6 +171,8 @@
     <string name="link_person">Link existing person</string>
     <string name="modify">Edit</string>
     <string name="unlink">Unlink</string>
+    <string name="highlight_lineage">Highlight lineage</string>
+    <string name="remove_highlight">Remove highlight</string>
     <string name="long_press_menu">Long press to display the menu.\nTap to open the profile.</string>
     <string name="export_png">Export PNG</string>
     <string name="export_pdf">Export PDF</string>
