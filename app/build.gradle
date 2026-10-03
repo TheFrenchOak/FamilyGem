@@ -24,7 +24,7 @@ android {
         }
     }
     defaultConfig {
-        applicationId = 'app.familygem'
+        applicationId = 'app.familygem.custom' // Different from the official 'app.familygem' to be installed alongside it
         minSdk = 23
         targetSdk = 37.2
         versionCode = 29
@@ -50,6 +50,8 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (credential)
                 signingConfig = signingConfigs.config
+            else // Without credentials the debug key makes the release APK installable
+                signingConfig = signingConfigs.debug
         }
     }
     buildFeatures {
